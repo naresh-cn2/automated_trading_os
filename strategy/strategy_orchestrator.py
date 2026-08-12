@@ -62,6 +62,12 @@ class StrategyOrchestrator:
         risk_pct: float = 0.01,
         min_rr: float = 4.0,
         account_balance: float = 1000.0,
+        maker_fee: float = 0.0002,
+        taker_fee: float = 0.0005,
+        taker_slippage: float = 0.0003,
+        cost_budget_pct: float = 0.25,
+        min_vol_pct: float = 0.0,
+        rr_pullback_mult: float = 1.5,  # pullback (Strategy A) entries must clear a premium R:R
     ) -> Optional[TradeCandidate]:
 
         # 1. HTF Bias + keyzone + expectation phase
@@ -88,13 +94,32 @@ class StrategyOrchestrator:
         sl_p = ltf_res.stop_loss_price
         tp_p = htf_res.target_price
 
-        # 4. Math-only risk firewall: max 1% risk, minimum 1:4 R:R
+        # 4. Math-only risk firewall: max `risk_pct` risk, minimum R:R. Pullback
+        #    (Strategy A) entries are structurally lower quality (they fade the
+        #    immediate move), so they must clear a premium R:R before being taken.
+        eff_min_rr = min_rr * (rr_pullback_mult if strategy == "A_PULLBACK_RIDING" else 1.0)
         risk_check = RiskEngine.calculate_risk(
             account_balance, entry_p, sl_p, tp_p,
-            risk_percentage=risk_pct, min_rr_ratio=min_rr,
+            risk_percentage=risk_pct, min_rr_ratio=eff_min_rr,
         )
         if not risk_check.is_trade_allowed:
             return None
+
+        # 4b. Institutional cost-aware filter: reject setups whose estimated round-trip
+        # execution cost (limit/maker entry + market/taker exit + slippage) would consume
+        # more than `cost_budget_pct` of the dollar risk. This surgically removes the
+        # tight-stop, high-notional-to-risk trades that bleed fees on every round trip.
+        notional = risk_check.position_size * entry_p
+        est_cost = notional * (maker_fee + taker_fee + taker_slippage)
+        if risk_check.dollar_risk > 0 and est_cost > cost_budget_pct * risk_check.dollar_risk:
+            return None
+
+        # 4c. Volatility floor filter: skip dead / low-volatility chop where the trend
+        # rarely reaches the HTF objective (mostly noise). Disabled when min_vol_pct <= 0.
+        if min_vol_pct > 0:
+            vol = StrategyOrchestrator._ltf_volatility_pct(ltf_candles)
+            if vol < min_vol_pct:
+                return None
 
         action = "BUY" if htf_res.bias == "BULLISH" else "SELL"
 
@@ -118,3 +143,28 @@ class StrategyOrchestrator:
                 f"MTF={mtf_res.reason} | LTF={ltf_res.entry_model} | RR=1:{risk_check.reward_to_risk_ratio:.2f}"
             ),
         )
+
+    @staticmethod
+    def _ltf_volatility_pct(candles: List[Candle], period: int = 14) -> float:
+        """
+        Current ATR (Wilder) of the most recent `period` bars, expressed as a
+        percentage of the latest close. Used by the volatility floor filter.
+        """
+        if len(candles) < 2:
+            return 0.0
+        trs = []
+        start = max(0, len(candles) - period)
+        for i in range(start, len(candles)):
+            if i == 0:
+                trs.append(candles[i].range)
+            else:
+                prev_close = candles[i - 1].close
+                trs.append(max(
+                    candles[i].high - candles[i].low,
+                    abs(candles[i].high - prev_close),
+                    abs(candles[i].low - prev_close),
+                ))
+        if not trs:
+            return 0.0
+        price = candles[-1].close or 1.0
+        return (sum(trs) / len(trs)) / price * 100.0

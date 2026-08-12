@@ -64,6 +64,23 @@ venv/bin/python run_full_backtest.py --risk 0.005 --minrr 5    # 0.5% risk, min 
 venv/bin/python run_full_backtest.py --export trades.csv       # write every trade to CSV
 ```
 
+### Institutional execution model (cost-aware)
+
+The backtest models real exchange economics instead of clean fills:
+
+- **Entry & TP** are treated as post-only **limit** orders resting at the keyzone
+  → **maker fee** (default 0.02%/side), zero slippage.
+- **Stop-loss & MTF trailing/CHoCH exits** are treated as **market** orders
+  → **taker fee** (default 0.05%/side) + adverse slippage (default 3bps/side).
+- **Cost-aware filter** (`--costbudget`, default 25%): any setup whose estimated
+  round-trip execution cost exceeds that fraction of the dollar risk is skipped.
+  This surgically removes the tight-stop / high-notional-to-risk trades that bleed
+  fees on every round trip — the single biggest "survives in reality" improvement.
+- **Volatility floor** (`--minvol 0`): optionally skip dead low-ATR chop where the
+  trend rarely reaches its HTF objective.
+
+Tunables: `--maker-fee`, `--taker-fee`, `--taker-slip`, `--costbudget`, `--minvol`.
+
 Outputs a per-combo table (trades, win rate, profit factor, avgR, TP/Trail/SL split,
 net P&L, max drawdown, return) plus by-set / by-symbol / by-strategy summaries.
 

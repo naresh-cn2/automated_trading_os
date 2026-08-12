@@ -66,6 +66,15 @@ class BacktestConfig:
     initial_balance: float = 1000.0
     risk_pct: float = 0.01
     min_rr: float = 4.0
+    # ---- Institutional execution cost model ----
+    maker_fee: float = 0.0002        # post-only limit fills: entry + TP (0.02%)
+    taker_fee: float = 0.0005        # market fills: SL + trailing exits (0.05%)
+    taker_slippage: float = 0.0003   # adverse slippage on market exits (3bps)
+    cost_budget_pct: float = 0.25    # skip if est. round-trip cost > this fraction of risk
+    min_vol_pct: float = 0.0         # LTF ATR% floor; 0 disables the volatility filter
+    rr_pullback_mult: float = 1.5    # pullback (Strategy A) entries require a premium R:R
+    lockin_r: float = 1.0            # start profit-lock after +1R favorable excursion
+    giveback_r: float = 0.75         # allow at most 0.75R giveback from the peak
     ltf_warmup: int = 160
     htf_lookback: int = 120
     mtf_lookback: int = 160
@@ -208,6 +217,11 @@ class BacktestEngine:
                     htf_candles=htf_slice, mtf_candles=mtf_slice, ltf_candles=ltf_slice,
                     risk_pct=cfg.risk_pct, min_rr=cfg.min_rr,
                     account_balance=balance,
+                    maker_fee=cfg.maker_fee, taker_fee=cfg.taker_fee,
+                    taker_slippage=cfg.taker_slippage,
+                    cost_budget_pct=cfg.cost_budget_pct,
+                    min_vol_pct=cfg.min_vol_pct,
+                    rr_pullback_mult=cfg.rr_pullback_mult,
                 )
                 if candidate is not None:
                     active = ManagedTrade(
@@ -220,6 +234,11 @@ class BacktestEngine:
                         position_size=candidate.position_size,
                         dollar_risk=candidate.dollar_risk,
                         entry_timestamp=ts,
+                        maker_fee=cfg.maker_fee, taker_fee=cfg.taker_fee,
+                        taker_slippage=cfg.taker_slippage,
+                        lockin_r=cfg.lockin_r, giveback_r=cfg.giveback_r,
+                        entry_risk_distance=abs(candidate.entry_price - candidate.stop_loss),
+                        max_favorable_price=candidate.entry_price,
                     )
                     last_mtf_idx = idx_mtf
 

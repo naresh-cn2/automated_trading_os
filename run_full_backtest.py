@@ -34,6 +34,22 @@ def parse_args():
     p.add_argument("--balance", type=float, default=1000.0)
     p.add_argument("--risk", type=float, default=0.01, help="fraction risked per trade (default 0.01)")
     p.add_argument("--minrr", type=float, default=4.0, help="minimum reward:risk (default 4.0)")
+    p.add_argument("--maker-fee", type=float, default=0.0002,
+                   help="post-only limit fill fee fraction (entry + TP), default 0.0002")
+    p.add_argument("--taker-fee", type=float, default=0.0005,
+                   help="market fill fee fraction (SL + trailing exits), default 0.0005")
+    p.add_argument("--taker-slip", type=float, default=0.0003,
+                   help="adverse slippage fraction on market exits, default 0.0003")
+    p.add_argument("--costbudget", type=float, default=0.25,
+                   help="skip trades whose est. round-trip cost exceeds this fraction of risk, default 0.25")
+    p.add_argument("--minvol", type=float, default=0.0,
+                   help="LTF ATR%% floor filter (0 disables); skip dead low-vol chop")
+    p.add_argument("--rrpullback", type=float, default=1.5,
+                   help="premium R:R multiplier for pullback (Strategy A) entries, default 1.5")
+    p.add_argument("--lockin", type=float, default=1.0,
+                   help="start profit-lock after this many R favorable excursion, default 1.0")
+    p.add_argument("--giveback", type=float, default=0.75,
+                   help="max R giveback from the peak allowed before locking, default 0.75")
     p.add_argument("--export", default=None, help="optional path to write all trades to CSV")
     return p.parse_args()
 
@@ -66,6 +82,11 @@ def main():
 
     engine = BacktestEngine(BacktestConfig(
         initial_balance=args.balance, risk_pct=args.risk, min_rr=args.minrr,
+        maker_fee=args.maker_fee, taker_fee=args.taker_fee,
+        taker_slippage=args.taker_slip,
+        cost_budget_pct=args.costbudget, min_vol_pct=args.minvol,
+        rr_pullback_mult=args.rrpullback,
+        lockin_r=args.lockin, giveback_r=args.giveback,
     ))
     all_results = []
 
@@ -74,6 +95,11 @@ def main():
     print(f"  Assets: {', '.join(assets)}   |   Sets: {', '.join(s.value for s in set_ids)}")
     print(f"  Risk: {args.risk*100:.1f}%/trade  |  Min R:R 1:{args.minrr:.0f}  |  "
           f"Management: MTF structural trailing")
+    print(f"  Execution: maker={args.maker_fee*100:.2f}%/entry&TP  taker={args.taker_fee*100:.2f}%/SL&trail  "
+          f"taker-slip={args.taker_slip*10000:.1f}bps  |  cost-filter budget={args.costbudget*100:.0f}% of risk"
+          + (f"  |  minvol={args.minvol:.2f}%" if args.minvol > 0 else ""))
+    print(f"  Profit-lock: lock after +{args.lockin:.1f}R, max {args.giveback:.2f}R giveback  |  "
+          f"pullback premium R:R x{args.rrpullback:.1f}")
     print("=" * 96)
 
     header = (f"{'Combination':<28}{'TF':<15}{'Trd':>5}{'WR%':>7}{'PF':>7}"

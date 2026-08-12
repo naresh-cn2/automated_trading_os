@@ -51,6 +51,14 @@ class ManagedTrade:
     position_size: float
     dollar_risk: float
     entry_timestamp: int
+    maker_fee: float = 0.0002     # post-only limit fills: entry & TP (0.02%)
+    taker_fee: float = 0.0005     # market fills: SL & trailing exits (0.05%)
+    entry_slippage: float = 0.0   # limit entry -> typically zero (post-only)
+    taker_slippage: float = 0.0003  # adverse slippage on market exits (3bps)
+    lockin_r: float = 1.0         # start profit-lock after +1R favorable excursion
+    giveback_r: float = 0.75      # allow at most 0.75R giveback from the peak before locking
+    entry_risk_distance: float = 0.0  # risk at entry (unchanged by the ratchet)
+    max_favorable_price: float = 0.0  # peak favorable excursion price
     status: TradeStatus = TradeStatus.OPEN
     exit_price: float = 0.0
     exit_reason: Optional[ExitReason] = None
@@ -69,14 +77,27 @@ class ManagedTrade:
         self.exit_reason = reason
         self.exit_timestamp = timestamp
         self.status = TradeStatus.CLOSED
-        risk = self.risk_distance
-        if risk <= 0:
-            self.r_multiple = 0.0
-        elif self.action == "BUY":
-            self.r_multiple = (exit_price - self.entry_price) / risk
+
+        # Institutional execution model:
+        #   - Entry and TP are RESTING LIMIT orders at the keyzone -> maker fee, no slippage.
+        #   - SL and the MTF trailing / CHoCH exits are MARKET orders -> taker fee + adverse slip.
+        is_limit_exit = reason == ExitReason.TP_HIT
+        exit_fee = self.maker_fee if is_limit_exit else self.taker_fee
+        exit_slip = 0.0 if is_limit_exit else self.taker_slippage
+
+        if self.action == "BUY":
+            eff_entry = self.entry_price * (1.0 + self.entry_slippage)
+            eff_exit = exit_price * (1.0 - exit_slip)
+            gross = (eff_exit - eff_entry) * self.position_size
         else:
-            self.r_multiple = (self.entry_price - exit_price) / risk
-        self.pnl = self.dollar_risk * self.r_multiple
+            eff_entry = self.entry_price * (1.0 - self.entry_slippage)
+            eff_exit = exit_price * (1.0 + exit_slip)
+            gross = (eff_entry - eff_exit) * self.position_size
+
+        # Fees charged on the notional of each executed leg
+        fees = (self.maker_fee * eff_entry + exit_fee * eff_exit) * self.position_size
+        self.pnl = gross - fees
+        self.r_multiple = (self.pnl / self.dollar_risk) if self.dollar_risk > 0 else 0.0
 
 
 class MTFTrailingEngine:
@@ -87,13 +108,39 @@ class MTFTrailingEngine:
         Checks an LTF bar for SL/TP fills (conservative: stop-loss is evaluated
         first when both are touched in the same bar). Returns (exit_price, reason)
         or None if still open.
+
+        Also applies the profit-lock ratchet: once the trade reaches +lockin_r
+        favorable excursion, the stop is raised (lowered for shorts) so the worst
+        case is a small giveback_r giveback from the peak instead of a full -1R loss.
         """
+        base_risk = trade.entry_risk_distance if trade.entry_risk_distance > 0 else trade.risk_distance
+
         if trade.action == "BUY":
+            # track peak favorable excursion & apply profit-lock
+            trade.max_favorable_price = max(trade.max_favorable_price, candle.high)
+            if base_risk > 0 and trade.lockin_r > 0:
+                fav_r = (trade.max_favorable_price - trade.entry_price) / base_risk
+                if fav_r >= trade.lockin_r:
+                    floor_stop = trade.max_favorable_price - trade.giveback_r * base_risk
+                    if floor_stop > trade.stop_loss:
+                        trade.stop_loss = floor_stop
+
             if candle.low <= trade.stop_loss:
                 return trade.stop_loss, ExitReason.SL_HIT
             if candle.high >= trade.take_profit:
                 return trade.take_profit, ExitReason.TP_HIT
         else:
+            trade.max_favorable_price = (
+                min(trade.max_favorable_price, candle.low)
+                if trade.max_favorable_price > 0 else candle.low
+            )
+            if base_risk > 0 and trade.lockin_r > 0:
+                fav_r = (trade.entry_price - trade.max_favorable_price) / base_risk
+                if fav_r >= trade.lockin_r:
+                    floor_stop = trade.max_favorable_price + trade.giveback_r * base_risk
+                    if floor_stop < trade.stop_loss:
+                        trade.stop_loss = floor_stop
+
             if candle.high >= trade.stop_loss:
                 return trade.stop_loss, ExitReason.SL_HIT
             if candle.low <= trade.take_profit:
