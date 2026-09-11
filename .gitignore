@@ -18,3 +18,12 @@ logs/
 .vscode/
 .idea/
 .DS_Store
+
+# Backtest experiment scratch (logs, trade exports, temp analyses)
+scratch/
+
+# Generated runtime databases & reports
+market_data/warehouse/
+market_data/metadata/
+market_data/audit/
+results/

@@ -73,8 +73,8 @@ class BacktestConfig:
     cost_budget_pct: float = 0.25    # skip if est. round-trip cost > this fraction of risk
     min_vol_pct: float = 0.0         # LTF ATR% floor; 0 disables the volatility filter
     rr_pullback_mult: float = 1.5    # pullback (Strategy A) entries require a premium R:R
-    lockin_r: float = 1.0            # start profit-lock after +1R favorable excursion
-    giveback_r: float = 0.75         # allow at most 0.75R giveback from the peak
+    lockin_r: float = 0.5            # start profit-lock after +0.5R favorable excursion
+    giveback_r: float = 0.25         # allow at most 0.25R giveback from the peak
     ltf_warmup: int = 160
     htf_lookback: int = 120
     mtf_lookback: int = 160

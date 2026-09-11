@@ -80,6 +80,8 @@ class StrategyOrchestrator:
             else "B_CONTINUATION_RIDING"
         )
 
+        action = "BUY" if htf_res.bias == "BULLISH" else "SELL"
+
         # 2. MTF Setup (structure realignment toward bias)
         mtf_res = MTFSetupEngine.evaluate_mtf_setup(mtf_state, mtf_candles, htf_res.bias)
         if not mtf_res.is_aligned:
@@ -93,6 +95,17 @@ class StrategyOrchestrator:
         entry_p = ltf_res.trigger_price
         sl_p = ltf_res.stop_loss_price
         tp_p = htf_res.target_price
+
+        # 3b. Side-correctness firewall: the risk engine only compares ABSOLUTE
+        # distances, so a mis-side-mapped stop or target (e.g. a SELL whose HTF
+        # "take-profit" sits ABOVE the entry) passes the 1:4 R:R check, then fills
+        # instantly on entry at a large loss. Enforce strict ordering:
+        #     BUY :  stop < entry < target
+        #     SELL:  target < entry < stop
+        if action == "BUY" and not (sl_p < entry_p < tp_p):
+            return None
+        if action == "SELL" and not (tp_p < entry_p < sl_p):
+            return None
 
         # 4. Math-only risk firewall: max `risk_pct` risk, minimum R:R. Pullback
         #    (Strategy A) entries are structurally lower quality (they fade the

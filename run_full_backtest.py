@@ -46,10 +46,10 @@ def parse_args():
                    help="LTF ATR%% floor filter (0 disables); skip dead low-vol chop")
     p.add_argument("--rrpullback", type=float, default=1.5,
                    help="premium R:R multiplier for pullback (Strategy A) entries, default 1.5")
-    p.add_argument("--lockin", type=float, default=1.0,
-                   help="start profit-lock after this many R favorable excursion, default 1.0")
-    p.add_argument("--giveback", type=float, default=0.75,
-                   help="max R giveback from the peak allowed before locking, default 0.75")
+    p.add_argument("--lockin", type=float, default=0.5,
+                   help="start profit-lock after this many R favorable excursion, default 0.5")
+    p.add_argument("--giveback", type=float, default=0.25,
+                   help="max R giveback from the peak allowed before locking, default 0.25")
     p.add_argument("--export", default=None, help="optional path to write all trades to CSV")
     return p.parse_args()
 

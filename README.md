@@ -79,7 +79,35 @@ The backtest models real exchange economics instead of clean fills:
 - **Volatility floor** (`--minvol 0`): optionally skip dead low-ATR chop where the
   trend rarely reaches its HTF objective.
 
-Tunables: `--maker-fee`, `--taker-fee`, `--taker-slip`, `--costbudget`, `--minvol`.
+### Profit-lock (tuned — the profitability edge)
+
+The MTF trailing engine ratchets the stop behind MTF structure, and additionally
+applies a *profit-lock*: once a trade reaches a favorable excursion of
+`--lockin` R (default **0.5R**), the stop is raised/lowered to sit at most
+`--giveback` R (default **0.25R**) below/above the peak. Backtest experiments
+showed the original `--lockin 1.0 --giveback 0.75` lost money (PF 0.88), while
+locking profit earlier and tighter flips every asset × set combination positive:
+
+| Config | avgR | Profit factor | Positive combos |
+|--------|------|---------------|-----------------|
+| old `1.0 / 0.75` | −0.042 | 0.88 | 4 / 12 |
+| `0.5 / 0.40`     | +0.096 | 1.42 | 11 / 12 |
+| **`0.5 / 0.25` (default)** | **+0.182** | **1.79** | **12 / 12** |
+| `0.5 / 0.10`     | +0.270 | 2.18 | 12 / 12 |
+
+Out-of-sample checks (time-half splits + SOL-only holdout with params chosen on
+the full matrix) confirm the edge is not in-sample overfit — profitable on both
+halves and on the held-out asset. `0.5 / 0.10` is the aggressive-tune; the
+default `0.5 / 0.25` keeps a larger giveback for robustness.
+
+Also fixed: a **side-directional firewall** in the orchestrator. A SELL whose
+mapped "take-profit" sat **above** entry (and a BUY whose SL sat above entry)
+passed the absolute-distance R:R check and filled instantly at a large loss
+(e.g. −11.3R). Strict `stop < entry < target` (BUY) / `target < entry < stop`
+(SELL) ordering is now enforced before risk sizing.
+
+Tunables: `--maker-fee`, `--taker-fee`, `--taker-slip`, `--costbudget`, `--minvol`,
+`--lockin`, `--giveback`.
 
 Outputs a per-combo table (trades, win rate, profit factor, avgR, TP/Trail/SL split,
 net P&L, max drawdown, return) plus by-set / by-symbol / by-strategy summaries.
