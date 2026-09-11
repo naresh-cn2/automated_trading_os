@@ -17,6 +17,8 @@ class TimeframeState:
     recent_events: Tuple[Any, ...]
     protected_low: Any
     protected_high: Any
+    weak_low: Any
+    weak_high: Any
     equal_levels: Tuple[KeyLevel, ...]
     fair_value_gaps: Tuple[PriceZone, ...]
     order_blocks: Tuple[PriceZone, ...]
@@ -59,6 +61,8 @@ class TimeframeEngine:
             recent_events=tuple(struct_state.recent_events),
             protected_low=struct_state.anchors.protected_low,
             protected_high=struct_state.anchors.protected_high,
+            weak_low=struct_state.anchors.weak_low,
+            weak_high=struct_state.anchors.weak_high,
             equal_levels=equal_levels,
             fair_value_gaps=fvgs,
             order_blocks=obs,
