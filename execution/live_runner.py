@@ -69,6 +69,19 @@ class WarehouseProvider:
 
 class LiveRunner:
 
+    # Certified backtest defaults — live/paper MUST match the backtest, or the
+    # "profitable" claim does not transfer. Keep in sync with BacktestConfig.
+    RISK_PCT = 0.01
+    MIN_RR = 4.0
+    MAKER_FEE = 0.0002
+    TAKER_FEE = 0.0005
+    TAKER_SLIPPAGE = 0.0003
+    COST_BUDGET_PCT = 0.25
+    MIN_VOL_PCT = 0.0
+    RR_PULLBACK_MULT = 1.5
+    LOCKIN_R = 0.5
+    GIVEBACK_R = 0.25
+
     def __init__(self, provider, broker: PaperBroker,
                  assets=None, sets=None, lookbacks=(120, 160, 160)):
         self.provider = provider
@@ -123,7 +136,19 @@ class LiveRunner:
                             sig = MTFTrailingEngine.on_mtf_close(trade, mtf_state)
                             if sig is not None:
                                 self.broker.close_trade(trade, bar.close, sig[1], bar.timestamp)
+                            else:
+                                # persist ratcheted stop / peak / event cursor
+                                try:
+                                    self.broker.sync_open_trade(trade)
+                                except AttributeError:
+                                    pass
                             self._last_mtf_idx[key] = mtf_candles[-1].timestamp
+                        else:
+                            # intrabar profit-lock may have moved the stop: persist it
+                            try:
+                                self.broker.sync_open_trade(trade)
+                            except AttributeError:
+                                pass
 
                 # ----- new entry (only if combo is flat) -----
                 combo_positions = [
@@ -138,11 +163,22 @@ class LiveRunner:
                     htf_state=htf_state, mtf_state=mtf_state, ltf_state=ltf_state,
                     htf_candles=htf_candles, mtf_candles=mtf_candles,
                     ltf_candles=ltf_candles,
+                    risk_pct=self.RISK_PCT, min_rr=self.MIN_RR,
                     account_balance=self.broker.balance(),
+                    maker_fee=self.MAKER_FEE, taker_fee=self.TAKER_FEE,
+                    taker_slippage=self.TAKER_SLIPPAGE,
+                    cost_budget_pct=self.COST_BUDGET_PCT,
+                    min_vol_pct=self.MIN_VOL_PCT,
+                    rr_pullback_mult=self.RR_PULLBACK_MULT,
                 )
                 if candidate is not None:
                     self.broker.open_trade(candidate, f"{asset}USDT",
-                                           set_id.value, ltf_candles[-1].timestamp)
+                                           set_id.value, ltf_candles[-1].timestamp,
+                                           maker_fee=self.MAKER_FEE,
+                                           taker_fee=self.TAKER_FEE,
+                                           taker_slippage=self.TAKER_SLIPPAGE,
+                                           lockin_r=self.LOCKIN_R,
+                                           giveback_r=self.GIVEBACK_R)
                     signals += 1
                     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] SIGNAL {candidate.strategy} "
                           f"{asset} {set_id.value} {candidate.action} @{candidate.entry_price:.2f} "

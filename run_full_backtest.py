@@ -58,13 +58,15 @@ def export_csv(results, path):
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["symbol", "set_id", "strategy", "action",
-                    "entry_price", "stop_loss", "take_profit",
+                    "entry_price", "initial_stop_loss", "stop_loss", "take_profit",
                     "position_size", "dollar_risk",
                     "exit_price", "exit_reason", "r_multiple", "pnl"])
         for _sym, _set, _cfg, res in results:
             for t in res.trades:
                 w.writerow([t.symbol, t.set_id, t.strategy, t.action,
-                            round(t.entry_price, 6), round(t.stop_loss, 6),
+                            round(t.entry_price, 6),
+                            round(getattr(t, "initial_stop_loss", 0.0) or t.stop_loss, 6),
+                            round(t.stop_loss, 6),
                             round(t.take_profit, 6), round(t.position_size, 8),
                             round(t.dollar_risk, 4), round(t.exit_price, 6),
                             t.exit_reason.value if t.exit_reason else "",

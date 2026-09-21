@@ -55,9 +55,10 @@ class ManagedTrade:
     taker_fee: float = 0.0005     # market fills: SL & trailing exits (0.05%)
     entry_slippage: float = 0.0   # limit entry -> typically zero (post-only)
     taker_slippage: float = 0.0003  # adverse slippage on market exits (3bps)
-    lockin_r: float = 1.0         # start profit-lock after +1R favorable excursion
-    giveback_r: float = 0.75      # allow at most 0.75R giveback from the peak before locking
+    lockin_r: float = 0.5         # start profit-lock after +0.5R favorable excursion
+    giveback_r: float = 0.25      # allow at most 0.25R giveback from the peak before locking
     entry_risk_distance: float = 0.0  # risk at entry (unchanged by the ratchet)
+    initial_stop_loss: float = 0.0  # immutable entry stop (audit trail; stop_loss mutates)
     max_favorable_price: float = 0.0  # peak favorable excursion price
     status: TradeStatus = TradeStatus.OPEN
     exit_price: float = 0.0
@@ -67,6 +68,14 @@ class ManagedTrade:
     pnl: float = 0.0
     last_mtf_event_ts: int = 0
     trail_history: List[tuple] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        # Freeze the entry stop for auditability; `stop_loss` is mutated by
+        # the MTF ratchet / profit-lock. 0.0 means "not yet frozen" (legacy
+        # rows) -> fall back to the current stop.
+        if not self.initial_stop_loss:
+            object.__setattr__(self, "initial_stop_loss", self.stop_loss)
+
 
     @property
     def risk_distance(self) -> float:
@@ -115,6 +124,19 @@ class MTFTrailingEngine:
         """
         base_risk = trade.entry_risk_distance if trade.entry_risk_distance > 0 else trade.risk_distance
 
+        def _stop_reason(t: ManagedTrade) -> ExitReason:
+            """Profit-locked / structurally-trailed stops are wins, not raw SLs.
+
+            Once the stop has ratcheted past breakeven (into profit), hitting it
+            is a successful structural-trail exit, so report MTF_TRAIL_HIT
+            instead of SL_HIT. True initial-stop losses stay SL_HIT.
+            """
+            if t.action == "BUY" and t.stop_loss > t.entry_price:
+                return ExitReason.MTF_TRAIL_HIT
+            if t.action == "SELL" and 0 < t.stop_loss < t.entry_price:
+                return ExitReason.MTF_TRAIL_HIT
+            return ExitReason.SL_HIT
+
         if trade.action == "BUY":
             # track peak favorable excursion & apply profit-lock
             trade.max_favorable_price = max(trade.max_favorable_price, candle.high)
@@ -126,7 +148,7 @@ class MTFTrailingEngine:
                         trade.stop_loss = floor_stop
 
             if candle.low <= trade.stop_loss:
-                return trade.stop_loss, ExitReason.SL_HIT
+                return trade.stop_loss, _stop_reason(trade)
             if candle.high >= trade.take_profit:
                 return trade.take_profit, ExitReason.TP_HIT
         else:
@@ -142,7 +164,7 @@ class MTFTrailingEngine:
                         trade.stop_loss = floor_stop
 
             if candle.high >= trade.stop_loss:
-                return trade.stop_loss, ExitReason.SL_HIT
+                return trade.stop_loss, _stop_reason(trade)
             if candle.low <= trade.take_profit:
                 return trade.take_profit, ExitReason.TP_HIT
         return None

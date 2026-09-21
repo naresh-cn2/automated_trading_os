@@ -126,7 +126,11 @@ def test_mtf_trailing():
         strategy="A_PULLBACK_RIDING", action="BUY",
         entry_price=100.0, stop_loss=98.0, take_profit=130.0,
         position_size=1.0, dollar_risk=10.0, entry_timestamp=0,
+        lockin_r=0.5, giveback_r=0.25, entry_risk_distance=2.0,
+        initial_stop_loss=98.0, max_favorable_price=100.0,
     )
+    assert trade.initial_stop_loss == 98.0
+    assert trade.lockin_r == 0.5 and trade.giveback_r == 0.25
     # ratchet: protected_low above current SL trails it up
     st = _state(protected_low=_swing(SwingOrientation.LOW, 101.0, 600), close=104.0)
     sig = MTFTrailingEngine.on_mtf_close(trade, st)
@@ -142,6 +146,38 @@ def test_mtf_trailing():
     assert sig2 is not None
     assert sig2[1] == ExitReason.MTF_CHOCH_EXIT
     print("  OK test_mtf_trailing")
+
+
+def test_trailing_stop_classification():
+    """Profit-locked stops must report MTF_TRAIL_HIT, raw stops stay SL_HIT."""
+    from market_language.market_structure import Candle as _C
+    t = ManagedTrade(
+        trade_id="t2", symbol="BTCUSDT", set_id="SET_3_SWING",
+        strategy="B_CONTINUATION_RIDING", action="BUY",
+        entry_price=100.0, stop_loss=98.0, take_profit=130.0,
+        position_size=1.0, dollar_risk=10.0, entry_timestamp=0,
+        lockin_r=0.5, giveback_r=0.25, entry_risk_distance=2.0,
+        initial_stop_loss=98.0, max_favorable_price=100.0,
+    )
+    # raw stop, no excursion -> SL_HIT
+    hit = MTFTrailingEngine.check_intrabar_exit(t, _C(1, 100, 100, 97, 98, 10))
+    assert hit is not None and hit[1] == ExitReason.SL_HIT, hit
+    # after +1R excursion the lock moves the stop into profit -> MTF_TRAIL_HIT
+    t2 = ManagedTrade(
+        trade_id="t3", symbol="BTCUSDT", set_id="SET_3_SWING",
+        strategy="B_CONTINUATION_RIDING", action="BUY",
+        entry_price=100.0, stop_loss=98.0, take_profit=130.0,
+        position_size=1.0, dollar_risk=10.0, entry_timestamp=0,
+        lockin_r=0.5, giveback_r=0.25, entry_risk_distance=2.0,
+        initial_stop_loss=98.0, max_favorable_price=100.0,
+    )
+    # +1.0R excursion (high 102): lock floor = 102 - 0.25*2 = 101.5, no fill on
+    # this bar (low 101.6 > stop), stop ratchets into profit.
+    assert MTFTrailingEngine.check_intrabar_exit(t2, _C(2, 100, 102, 101.6, 101.8, 10)) is None
+    assert t2.stop_loss > 100.0, t2.stop_loss  # locked into profit
+    hit2 = MTFTrailingEngine.check_intrabar_exit(t2, _C(3, 101, 101, 100, 100, 10))
+    assert hit2 is not None and hit2[1] == ExitReason.MTF_TRAIL_HIT, hit2
+    print("  OK test_trailing_stop_classification")
 
 
 def test_orchestrator_full():
@@ -181,11 +217,62 @@ def test_orchestrator_full():
         htf_state=htf_state, mtf_state=mtf_state, ltf_state=ltf_state,
         htf_candles=htf_candles, mtf_candles=mtf_candles, ltf_candles=ltf_candles,
         account_balance=1000.0,
+        rr_pullback_mult=1.0,  # test fixture RR=4.44 clears 1:4 but not the live 1:6 pullback premium
     )
     assert cand is not None, "orchestrator returned None"
     assert cand.strategy in ("A_PULLBACK_RIDING", "B_CONTINUATION_RIDING")
     assert cand.reward_to_risk >= 4.0
     print("  OK test_orchestrator_full ->", cand.strategy)
+
+
+def test_orchestrator_pullback_premium():
+    """Strategy A must clear the 1.5x pullback premium (live default)."""
+    htf_state = _state(
+        bias="BULLISH",
+        events=[StructuralEvent(event_type=EventType.EXTERNAL_BOS_BULLISH,
+                                trigger_timestamp=1000, trigger_price=100.0)],
+        external=[_swing(SwingOrientation.HIGH, 102.0, 1000),
+                  _swing(SwingOrientation.LOW, 90.0, 900)],
+        protected_low=_swing(SwingOrientation.LOW, 88.0, 800),
+        weak_high=_swing(SwingOrientation.HIGH, 115.0, 1000),
+        obs=[PriceZone(ZoneType.BULLISH_OB, 96.0, 94.0, 900)],
+        close=100.0,
+    )
+    mtf_state = _state(
+        bias="BULLISH",
+        events=[StructuralEvent(event_type=EventType.EXTERNAL_CHOCH_BULLISH,
+                                trigger_timestamp=1500, trigger_price=100.0)],
+        protected_low=_swing(SwingOrientation.LOW, 97.0, 700),
+        close=100.0,
+    )
+    ltf_level = [_swing(SwingOrientation.LOW, 99.0, 500)]
+    ltf_candles = [Candle(500 + i * 60, 99.5, 101, 99.3, 100.6, 100) for i in range(20)]
+    ltf_candles.append(Candle(2000, 100.5, 101.5, 98.9, 100.8, 150))
+    ltf_candles.append(Candle(2060, 100.8, 102.0, 100.5, 101.5, 150))
+    ltf_state = _state(
+        bias="BULLISH",
+        events=[StructuralEvent(event_type=EventType.EXTERNAL_CHOCH_BULLISH,
+                                trigger_timestamp=2060, trigger_price=101.0)],
+        internal=ltf_level, close=101.5, trend="BULLISH",
+    )
+    htf_candles = [Candle(100, 95, 100, 94, 99, 100)]
+    mtf_candles = [Candle(100, 95, 100, 94, 99, 100)]
+    # Fixture RR is ~4.44: passes 1:4 with no premium, fails the live 1:6 pullback bar.
+    cand_plain = StrategyOrchestrator.evaluate_bar(
+        set_id="SET_4_INTRADAY",
+        htf_state=htf_state, mtf_state=mtf_state, ltf_state=ltf_state,
+        htf_candles=htf_candles, mtf_candles=mtf_candles, ltf_candles=ltf_candles,
+        account_balance=1000.0, rr_pullback_mult=1.0,
+    )
+    assert cand_plain is not None
+    cand_live = StrategyOrchestrator.evaluate_bar(
+        set_id="SET_4_INTRADAY",
+        htf_state=htf_state, mtf_state=mtf_state, ltf_state=ltf_state,
+        htf_candles=htf_candles, mtf_candles=mtf_candles, ltf_candles=ltf_candles,
+        account_balance=1000.0, rr_pullback_mult=1.5,
+    )
+    assert cand_live is None, "pullback premium must reject RR=4.44 at 1:6 bar"
+    print("  OK test_orchestrator_pullback_premium")
 
 
 if __name__ == "__main__":
@@ -194,6 +281,8 @@ if __name__ == "__main__":
     test_mtf_setup_engine()
     test_ltf_entry_liquidity_sweep()
     test_mtf_trailing()
+    test_trailing_stop_classification()
     test_orchestrator_full()
+    test_orchestrator_pullback_premium()
     print("\n✅ ALL STRATEGY-LAYER TESTS PASSED")
 
