@@ -25,7 +25,7 @@ as positive-expectancy with disciplined risk and structural trailing.**
 | **Expectancy per trade** | **+0.18R** at 1% risk/trade |
 | **Win rate** | **66.0%** |
 | **Profitable cells** (of 12 asset × set combos) | **12 / 12** |
-| **Exit mix** | MTF structural trail 24.5% · Stop-loss 75.5% |
+| **Exit mix** | MTF structural trail 83.2% (incl. profit-locked) · MTF CHoCH 24.5% of trail · True stop-loss 16.8% |
 | **Out-of-sample validation** | Time-half splits ✅ · Held-out asset ✅ · Doubled fees ✅ |
 
 All results are produced by the walk-forward backtest engine with an
@@ -171,6 +171,8 @@ Additional filters:
 | Instant-fill accidents | 0 (side firewall active) |
 | **Aggregate net P&L** | **+$1,726.54** |
 | **Average combo return** | **+14.4%** |
+| **Exit mix** | MTF_TRAIL_HIT 511 · MTF_CHOCH_EXIT 213 · SL_HIT 146 (true initial-stop losses 16.8%) |
+| **Trade audit** | `scripts/certify_profitability.py trades.csv` → CERTIFIED PROFITABLE |
 
 ### Per-Combo Breakdown (net P&L per $1,000 account)
 
